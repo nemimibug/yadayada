@@ -158,7 +158,9 @@ local function debugPrint(text:string)
 end
 
 -- Offsets
-
+-- HTTP is blocked/returning empty bodies in some executors, so this loader
+-- uses the live dump when available and falls back to the last known-good
+-- offsets required by this script.
 local HttpService = game:GetService("HttpService")
 
 local OFFSET_URLS = {
@@ -167,54 +169,55 @@ local OFFSET_URLS = {
     "https://imtheo.lol/Offsets/Offsets.json",
 }
 
-local function decodeOffsetValue(value)
-    if type(value) == "number" then
-        return value
-    end
+-- Last known-good values from offsets.imtheo.lol for Roblox
+-- version-c5aecda2245e4fae, dumped 2026-09-09.
+-- Only values actually used by this script are included.
+local BAKED_OFFSETS = {
+    GuiObject = {
+        Text = 3584,
+        Visible = 1453,
+        Size = 1328,
+    },
+    Misc = {
+        Value = 184,
+    },
+    SurfaceAppearance = {
+        ColorMap = 200,
+    },
+}
 
-    if type(value) == "string" then
-        local hex = value:match("^0[xX]([%da-fA-F]+)$")
-        if hex then
-            return tonumber(hex, 16)
-        end
-        return tonumber(value)
+local function normalizeBody(body)
+    if type(body) ~= "string" or body == "" then
+        return nil
     end
-
-    return nil
+    return body
 end
 
 local function requestBody(url)
-    local errors = {}
+    -- Prefer executor request APIs because some executors return an empty
+    -- string from game:HttpGet even when outbound requests otherwise work.
+    local requestFn = rawget(_G, "request")
+        or rawget(_G, "http_request")
+        or (rawget(_G, "syn") and rawget(_G, "syn").request)
+        or (rawget(_G, "http") and rawget(_G, "http").request)
 
-    -- Prefer executor request APIs when available. They tend to handle
-    -- redirects/CDN responses more reliably than game:HttpGet.
-    local requestFns = {
-        rawget(_G, "request"),
-        rawget(_G, "http_request"),
-        syn and syn.request or nil,
-        http and http.request or nil,
-    }
+    if type(requestFn) == "function" then
+        local ok, response = pcall(requestFn, {
+            Url = url,
+            Method = "GET",
+            Headers = {
+                ["Accept"] = "application/json",
+                ["User-Agent"] = "Matcha/2.2.5",
+            },
+        })
 
-    for _, requestFn in ipairs(requestFns) do
-        if type(requestFn) == "function" then
-            local ok, result = pcall(requestFn, {
-                Url = url,
-                Method = "GET",
-                Headers = {
-                    ["Accept"] = "application/json,text/plain,*/*",
-                    ["User-Agent"] = "Mozilla/5.0",
-                    ["Cache-Control"] = "no-cache",
-                },
-            })
-
-            if ok and type(result) == "table" then
-                local body = result.Body or result.body
-                if type(body) == "string" and body:match("%S") then
-                    return body
-                end
-                errors[#errors + 1] = "request API returned an empty body"
-            elseif not ok then
-                errors[#errors + 1] = tostring(result)
+        if ok then
+            if type(response) == "table" then
+                local body = normalizeBody(response.Body or response.body)
+                if body then return body end
+            elseif type(response) == "string" then
+                local body = normalizeBody(response)
+                if body then return body end
             end
         end
     end
@@ -222,122 +225,101 @@ local function requestBody(url)
     local ok, body = pcall(function()
         return game:HttpGet(url, true)
     end)
-
-    if ok and type(body) == "string" and body:match("%S") then
-        return body
+    if ok then
+        body = normalizeBody(body)
+        if body then return body end
     end
 
-    errors[#errors + 1] = ok and "game:HttpGet returned an empty body" or tostring(body)
-    return nil, table.concat(errors, " | ")
+    return nil
 end
 
 local function decodeOffsetDump(body)
-    if type(body) ~= "string" or not body:match("%S") then
-        return nil, "empty HTTP response"
+    if type(body) ~= "string" or body == "" then
+        return nil
     end
 
-    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, body)
-    if not ok then
-        return nil, "JSON decode failed: " .. tostring(decoded)
-    end
+    local ok, decoded = pcall(function()
+        return HttpService:JSONDecode(body)
+    end)
+    if not ok then return nil end
 
-    -- Some proxies/CDNs can return a JSON-encoded string containing the
-    -- actual JSON payload. Decode one extra layer if that happens.
+    -- Handle JSON that itself contains an encoded JSON string.
     if type(decoded) == "string" then
-        local ok2, decoded2 = pcall(HttpService.JSONDecode, HttpService, decoded)
-        if ok2 then
-            decoded = decoded2
-        end
+        local ok2, decoded2 = pcall(function()
+            return HttpService:JSONDecode(decoded)
+        end)
+        if ok2 then decoded = decoded2 end
     end
 
     if type(decoded) ~= "table" then
-        return nil, "decoded JSON was not a table (got " .. type(decoded) .. ")"
+        return nil
+    end
+
+    if type(decoded.Offsets) == "table" then
+        return decoded.Offsets
     end
 
     return decoded
 end
 
-local function loadOffsetDump()
-    local errors = {}
+local function hasRequiredOffsets(t)
+    return type(t) == "table"
+        and type(t.GuiObject) == "table"
+        and t.GuiObject.Text ~= nil
+        and t.GuiObject.Visible ~= nil
+        and t.GuiObject.Size ~= nil
+        and type(t.Misc) == "table"
+        and t.Misc.Value ~= nil
+        and type(t.SurfaceAppearance) == "table"
+        and t.SurfaceAppearance.ColorMap ~= nil
+end
 
+local function loadOffsets()
     for _, url in ipairs(OFFSET_URLS) do
-        local body, httpErr = requestBody(url)
+        local body = requestBody(url)
         if body then
-            local decoded, decodeErr = decodeOffsetDump(body)
-            if decoded then
-                debugPrint("Loaded offsets from " .. url)
-                return decoded
+            local decoded = decodeOffsetDump(body)
+            if hasRequiredOffsets(decoded) then
+                print("[Offsets] Loaded live offsets from " .. url)
+                return decoded, true
             end
-            errors[#errors + 1] = url .. ": " .. tostring(decodeErr)
-        else
-            errors[#errors + 1] = url .. ": " .. tostring(httpErr)
         end
     end
 
-    error("[Offsets] Unable to load a valid offset dump. " .. table.concat(errors, " || "))
+    warn("[Offsets] HTTP unavailable; using baked fallback offsets.")
+    return BAKED_OFFSETS, false
 end
 
-local rawOffsetDump = loadOffsetDump()
+local offsets, usingLiveOffsets = loadOffsets()
 
--- Never index .Offsets unless the loader definitely returned a table.
-if type(rawOffsetDump) ~= "table" then
-    error("[Offsets] Internal loader error: offset dump is " .. type(rawOffsetDump))
-end
-
-local offsets = rawOffsetDump
-if type(rawOffsetDump.Offsets) == "table" then
-    offsets = rawOffsetDump.Offsets
-end
-
-local function getOffset(category, name, required)
-    local group = offsets[category]
-
-    if type(group) ~= "table" then
-        local message = string.format("Missing offset category '%s'", tostring(category))
-        if required then
-            error("[Offsets] " .. message)
-        end
-        warn("[Offsets] " .. message)
-        return nil
+local function toNumber(value)
+    if type(value) == "number" then
+        return value
     end
-
-    local rawValue = group[name]
-    if rawValue == nil then
-        local message = string.format("Missing offset '%s.%s'", tostring(category), tostring(name))
-        if required then
-            error("[Offsets] " .. message)
-        end
-        warn("[Offsets] " .. message)
-        return nil
+    if type(value) == "string" then
+        local hex = value:match("^0[xX]([%da-fA-F]+)$")
+        if hex then return tonumber(hex, 16) end
+        return tonumber(value)
     end
+    return nil
+end
 
-    local value = decodeOffsetValue(rawValue)
+local function getOffset(category, name, fallback)
+    local group = offsets and offsets[category]
+    local value = type(group) == "table" and toNumber(group[name]) or nil
     if value == nil then
-        local message = string.format(
-            "Invalid offset value for '%s.%s': %s",
-            tostring(category),
-            tostring(name),
-            tostring(rawValue)
-        )
-
-        if required then
-            error("[Offsets] " .. message)
-        end
-        warn("[Offsets] " .. message)
-        return nil
+        value = fallback
+        warn(string.format("[Offsets] Missing %s.%s; using fallback %s", category, name, tostring(fallback)))
     end
-
     return value
 end
 
-local guiSizeOffset = getOffset("GuiObject", "Size", true)
-
 local memoryOffsets = {
-    Text = getOffset("GuiObject", "Text", true),
-    ElementVisible = getOffset("GuiObject", "Visible", true),
-    FrameSizeX = guiSizeOffset + 44,
-    Adornee = getOffset("Misc", "Value", true),
-    BaseColor3 = getOffset("SurfaceAppearance", "ColorMap", true),
+    Text = getOffset("GuiObject", "Text", BAKED_OFFSETS.GuiObject.Text),
+    ElementVisible = getOffset("GuiObject", "Visible", BAKED_OFFSETS.GuiObject.Visible),
+    Adornee = getOffset("Misc", "Value", BAKED_OFFSETS.Misc.Value),
+    FrameSizeX = getOffset("GuiObject", "Size", BAKED_OFFSETS.GuiObject.Size) + 44,
+    BaseColor3 = getOffset("SurfaceAppearance", "ColorMap", BAKED_OFFSETS.SurfaceAppearance.ColorMap),
 }
 
 -- ck clones setup
