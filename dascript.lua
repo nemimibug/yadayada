@@ -668,60 +668,70 @@ end
 
 -- Properties that contain Roblox asset/content IDs.
 -- These are written as <Content> values instead of ordinary strings.
-local CONTENT_PROPS_BY_CLASSNAME = {
-    MeshPart = { 'MeshId', 'MeshContent', 'TextureID', 'TextureId', 'TextureContent' },
+local CONTENTID_PROPS_BY_CLASSNAME = {
+    MeshPart = { 'MeshId', 'TextureID', 'TextureId' },
     SpecialMesh = { 'MeshId', 'TextureId' },
     CharacterMesh = { 'MeshId', 'BaseTextureId', 'OverlayTextureId' },
-
-    ParticleEmitter = { 'Texture', 'TextureContent' },
-    Beam = { 'Texture', 'TextureContent' },
-    Trail = { 'Texture', 'TextureContent' },
-
-    Decal = { 'Texture', 'TextureContent' },
-    Texture = { 'Texture', 'TextureContent' },
-    SurfaceAppearance = {
-        'ColorMap', 'ColorMapContent',
-        'MetalnessMap', 'MetalnessMapContent',
-        'NormalMap', 'NormalMapContent',
-        'RoughnessMap', 'RoughnessMapContent',
-        'EmissiveMaskContent', 'TexturePackContent',
-    },
-    MaterialVariant = {
-        'ColorMap', 'ColorMapContent',
-        'MetalnessMap', 'MetalnessMapContent',
-        'NormalMap', 'NormalMapContent',
-        'RoughnessMap', 'RoughnessMapContent',
-        'EmissiveMaskContent',
-    },
-
+    ParticleEmitter = { 'Texture' },
+    Beam = { 'Texture' },
+    Trail = { 'Texture' },
+    Decal = { 'Texture' },
+    Texture = { 'Texture' },
+    SurfaceAppearance = { 'ColorMap', 'MetalnessMap', 'NormalMap', 'RoughnessMap' },
+    MaterialVariant = { 'ColorMap', 'MetalnessMap', 'NormalMap', 'RoughnessMap' },
     Shirt = { 'ShirtTemplate' },
     Pants = { 'PantsTemplate' },
     ShirtGraphic = { 'Graphic' },
-
-    ImageLabel = { 'Image', 'ImageContent' },
-    ImageButton = { 'Image', 'ImageContent', 'HoverImage', 'PressedImage' },
+    ImageLabel = { 'Image' },
+    ImageButton = { 'Image', 'HoverImage', 'PressedImage' },
     ImageHandleAdornment = { 'Image' },
-
     Tool = { 'TextureId' },
-    ClickDetector = { 'CursorIcon', 'CursorIconContent' },
-    DragDetector = { 'CursorIcon', 'CursorIconContent' },
-
-    VideoFrame = { 'Video', 'VideoContent' },
-    VideoPlayer = { 'VideoContent' },
-
-    Sound = { 'SoundId', 'AudioContent' },
-    AudioPlayer = { 'Asset', 'AudioContent' },
-    Animation = { 'AnimationId', 'AnimationContent' },
-
+    ClickDetector = { 'CursorIcon' },
+    DragDetector = { 'CursorIcon' },
+    VideoFrame = { 'Video' },
+    Sound = { 'SoundId' },
+    Animation = { 'AnimationId' },
     Sky = {
         'SkyboxBk', 'SkyboxDn', 'SkyboxFt', 'SkyboxLf', 'SkyboxRt', 'SkyboxUp',
+        'SunTextureId', 'MoonTextureId',
+    },
+    WrapLayer = { 'CageMeshId', 'ReferenceMeshId' },
+    WrapTarget = { 'CageMeshId' },
+}
+
+-- Roblox's newer Content datatype is NOT the same serialization as ContentId.
+-- ContentId uses <Content><url>...</url></Content>; Content uses <Content><uri>...</uri></Content>.
+local MODERN_CONTENTID_PROPS_BY_CLASSNAME = {
+    MeshPart = { 'MeshContent', 'TextureContent' },
+    ParticleEmitter = { 'TextureContent' },
+    Beam = { 'TextureContent' },
+    Trail = { 'TextureContent' },
+    Decal = { 'TextureContent' },
+    Texture = { 'TextureContent' },
+    SurfaceAppearance = {
+        'ColorMapContent', 'MetalnessMapContent', 'NormalMapContent', 'RoughnessMapContent',
+        'EmissiveMaskContent', 'TexturePackContent',
+    },
+    MaterialVariant = {
+        'ColorMapContent', 'MetalnessMapContent', 'NormalMapContent', 'RoughnessMapContent',
+        'EmissiveMaskContent',
+    },
+    ImageLabel = { 'ImageContent' },
+    ImageButton = { 'ImageContent' },
+    ClickDetector = { 'CursorIconContent' },
+    DragDetector = { 'CursorIconContent' },
+    VideoFrame = { 'VideoContent' },
+    VideoPlayer = { 'VideoContent' },
+    Sound = { 'AudioContent' },
+    AudioPlayer = { 'Asset', 'AudioContent' },
+    Animation = { 'AnimationContent' },
+    Sky = {
         'SkyboxBackContent', 'SkyboxDownContent', 'SkyboxFrontContent',
         'SkyboxLeftContent', 'SkyboxRightContent', 'SkyboxUpContent',
-        'SunTextureId', 'SunTextureContent', 'MoonTextureId', 'MoonTextureContent',
+        'SunTextureContent', 'MoonTextureContent',
     },
-
-    WrapLayer = { 'CageMeshId', 'CageMeshContent', 'ReferenceMeshId', 'ReferenceMeshContent' },
-    WrapTarget = { 'CageMeshId', 'CageMeshContent' },
+    WrapLayer = { 'CageMeshContent', 'ReferenceMeshContent' },
+    WrapTarget = { 'CageMeshContent' },
 }
 
 -- Numeric asset IDs use int64 in Roblox XML; writing these as floats can be ignored.
@@ -1057,32 +1067,25 @@ local function buildPlayerNameSet()
 end
 
 local function tryDecompileScript(inst)
-    if not _G.CONFIG.decompileScripts then
-        return nil
-    end
+    if not _G.CONFIG.decompileScripts then return nil end
     local className = inst.ClassName
-    if className == 'Script' then
-        return 'Decompile failed: Matcha decompile method can only decompile LocalScripts and ModuleScripts)'
+    if className ~= 'Script' and className ~= 'LocalScript' and className ~= 'ModuleScript' then return nil end
+
+    local dec = nil
+    if type(decompile) == 'function' then dec = decompile end
+    if dec == nil then
+        local okEnv, env = pcall(function() return type(getgenv)=='function' and getgenv() or nil end)
+        if okEnv and type(env)=='table' and type(rawget(env,'decompile'))=='function' then dec=rawget(env,'decompile') end
     end
-    if className ~= 'LocalScript' and className ~= 'ModuleScript' then
-        return nil
-    end
+    if type(dec) ~= 'function' then return nil end
+
     local maxAttempts = 10
     for attempt = 1, maxAttempts do
-        local ok, src = pcall(decompile, inst)
+        local ok, src = pcall(dec, inst)
         if ok and type(src) == 'string' and src ~= '' then
-            if string.find(src, 'Unable to fetch', 1, true) then
-                -- retry
-            else
-                return src
-            end
-        else
-            return 'Decompile empty'
+            if not string.find(src, 'Unable to fetch', 1, true) then return src end
         end
-
-        if attempt < maxAttempts then
-            task.wait(0.1)
-        end
+        if attempt < maxAttempts then task.wait(0.1) end
     end
     return nil
 end
@@ -1250,14 +1253,45 @@ local function normalizeAssetUrl(v)
     return nil
 end
 
-local function writeContent(out, name, url)
-    local normalized = normalizeAssetUrl(url)
-    if normalized == nil then
-        return
-    end
+local function writeContentId(out, name, value)
+    local normalized = normalizeAssetUrl(value)
+    if normalized == nil then return end
     push(out, '<Content name="' .. xmlEscape(name) .. '">')
     push(out, '<url>' .. xmlEscape(normalized) .. '</url>')
     push(out, '</Content>')
+end
+
+local function writeModernContent(out, name, value, state)
+    if value == nil then return end
+
+    -- Roblox Content can be None, Uri, or Object. Most asset-backed properties are Uri.
+    local uri = safeGet(value, 'Uri') or safeGet(value, 'URI') or safeGet(value, 'uri')
+    if uri == nil then
+        local sourceType = safeGet(value, 'SourceType') or safeGet(value, 'ContentSourceType')
+        local sourceName = sourceType and safeGet(sourceType, 'Name')
+        if sourceName == 'None' then
+            push(out, '<Content name="' .. xmlEscape(name) .. '"><null></null></Content>')
+            return
+        end
+        local object = safeGet(value, 'Object') or safeGet(value, 'Instance') or safeGet(value, 'Value')
+        if object ~= nil and state and state.referentOf and state.referentOf[object] then
+            push(out, '<Content name="' .. xmlEscape(name) .. '"><Ref>' .. xmlEscape(state.referentOf[object]) .. '</Ref></Content>')
+            return
+        end
+        uri = normalizeAssetUrl(value)
+    else
+        uri = normalizeAssetUrl(uri) or tostring(uri)
+    end
+
+    if uri == nil or uri == '' then return end
+    push(out, '<Content name="' .. xmlEscape(name) .. '">')
+    push(out, '<uri>' .. xmlEscape(uri) .. '</uri>')
+    push(out, '</Content>')
+end
+
+local function writeProtectedString(out, name, value)
+    if value == nil then return end
+    writeTag(out, 'ProtectedString', { name = name }, xmlEscape(tostring(value)))
 end
 
 local function writeBrickColor(out, name, bc)
@@ -1575,7 +1609,7 @@ local function writeAny(out, name, v, state)
 
     local rtype = getRobloxType(v)
 
-    if rtype == 'Content' then writeContent(out, name, v); return end
+    if rtype == 'Content' then writeModernContent(out, name, v, state); return end
     if rtype == 'EnumItem' then
         local ev = safeGet(v, 'Value')
         if type(ev) == 'number' then writeToken(out, name, ev) end
@@ -1640,8 +1674,8 @@ local function writeAny(out, name, v, state)
     -- that Roblox will reject for the actual property type.
 end
 
-local function isContentProperty(className, prop)
-    local list = CONTENT_PROPS_BY_CLASSNAME[className]
+local function listContains(map, className, prop)
+    local list = map[className]
     if type(list) ~= 'table' then return false end
     for _, p in ipairs(list) do
         if p == prop then return true end
@@ -1649,27 +1683,111 @@ local function isContentProperty(className, prop)
     return false
 end
 
+local function isContentProperty(className, prop)
+    return listContains(CONTENTID_PROPS_BY_CLASSNAME, className, prop)
+        or listContains(MODERN_CONTENTID_PROPS_BY_CLASSNAME, className, prop)
+end
+
 local function isInt64Property(className, prop)
     local map = INT64_PROPERTIES_BY_CLASSNAME[className]
     return type(map) == 'table' and map[prop] == true
 end
 
-local function writeContentProps(out, inst, className)
-    local list = CONTENT_PROPS_BY_CLASSNAME[className]
-    if not list then return end
-    for _, prop in ipairs(list) do
-        writeContent(out, prop, safeGet(inst, prop))
+local function writeContentProps(out, inst, className, state)
+    local legacy = CONTENTID_PROPS_BY_CLASSNAME[className]
+    if type(legacy) == 'table' then
+        for _, prop in ipairs(legacy) do
+            writeContentId(out, prop, safeGet(inst, prop))
+        end
     end
+    local modern = MODERN_CONTENTID_PROPS_BY_CLASSNAME[className]
+    if type(modern) == 'table' then
+        for _, prop in ipairs(modern) do
+            writeModernContent(out, prop, safeGet(inst, prop), state)
+        end
+    end
+end
+
+-- Explicit XML type schemas for classes where silent fallback-to-default is especially harmful.
+-- These bypass runtime type guessing and write exactly the expected Roblox XML type.
+local PROPERTY_TYPES = {
+    ParticleEmitter = {
+        Acceleration='Vector3', Brightness='float', Color='ColorSequence', Drag='float',
+        EmissionDirection='token', Enabled='bool', FlipbookBlendFrames='bool',
+        FlipbookFramerate='NumberRange', FlipbookLayout='token', FlipbookMode='token',
+        FlipbookSizeX='int', FlipbookSizeY='int', FlipbookStartRandom='bool',
+        Lifetime='NumberRange', LightEmission='float', LightInfluence='float',
+        LocalTransparencyModifier='float', LockedToPart='bool', Orientation='token',
+        Rate='float', RotSpeed='NumberRange', Rotation='NumberRange', Shape='token',
+        ShapeInOut='token', ShapePartial='float', ShapeStyle='token', Size='NumberSequence',
+        Speed='NumberRange', SpreadAngle='Vector2', Squash='NumberSequence', TimeScale='float',
+        Transparency='NumberSequence', VelocityInheritance='float', VelocitySpread='float',
+        WindAffectsDrag='bool', ZOffset='float',
+    },
+    Beam = {
+        Attachment0='Ref', Attachment1='Ref', Brightness='float', Color='ColorSequence',
+        CurveSize0='float', CurveSize1='float', Enabled='bool', FaceCamera='bool',
+        LightEmission='float', LightInfluence='float', Segments='int', TextureLength='float',
+        TextureMode='token', TextureSpeed='float', Transparency='NumberSequence',
+        Width0='float', Width1='float', ZOffset='float',
+    },
+    Trail = {
+        Attachment0='Ref', Attachment1='Ref', Brightness='float', Color='ColorSequence',
+        Enabled='bool', FaceCamera='bool', Lifetime='float', LightEmission='float',
+        LightInfluence='float', MaxLength='float', MinLength='float', TextureLength='float',
+        TextureMode='token', Transparency='NumberSequence', WidthScale='NumberSequence',
+    },
+    SpecialMesh = { MeshType='token', Offset='Vector3', Scale='Vector3', VertexColor='Vector3' },
+    Decal = { Color3='Color3', Face='token', Transparency='float', ZIndex='int' },
+    Texture = { Color3='Color3', Face='token', OffsetStudsU='float', OffsetStudsV='float', StudsPerTileU='float', StudsPerTileV='float', Transparency='float', ZIndex='int' },
+    Animation = {},
+    Sound = {
+        Looped='bool', PlaybackSpeed='float', Playing='bool', TimePosition='double', Volume='float',
+        RollOffMaxDistance='float', RollOffMinDistance='float', RollOffMode='token', PlayOnRemove='bool',
+    },
+    SurfaceAppearance = { AlphaMode='token', Color='Color3', EmissiveStrength='float', EmissiveTint='Color3', ResampleMode='token' },
+    MaterialVariant = { BaseMaterial='string', StudsPerTile='float', CustomPhysicalProperties='PhysicalProperties' },
+    ImageLabel = { ImageColor3='Color3', ImageRectOffset='Vector2', ImageRectSize='Vector2', ImageTransparency='float', ResampleMode='token', ScaleType='token', SliceCenter='Rect', SliceScale='float', TileSize='UDim2' },
+    ImageButton = { AutoButtonColor='bool', ImageColor3='Color3', ImageRectOffset='Vector2', ImageRectSize='Vector2', ImageTransparency='float', ResampleMode='token', ScaleType='token', SliceCenter='Rect', SliceScale='float', TileSize='UDim2' },
+}
+
+local function writeTyped(out, name, value, kind, state)
+    if value == nil then return end
+    if kind == 'bool' then writeBool(out,name,value)
+    elseif kind == 'int' then if type(value)=='number' then writeInt(out,name,math.floor(value)) end
+    elseif kind == 'int64' then if type(value)=='number' then writeInt64(out,name,value) end
+    elseif kind == 'float' then if type(value)=='number' then writeFloat(out,name,value) end
+    elseif kind == 'double' then if type(value)=='number' then writeDouble(out,name,value) end
+    elseif kind == 'string' then writeString(out,name,tostring(value))
+    elseif kind == 'ProtectedString' then writeProtectedString(out,name,value)
+    elseif kind == 'token' then local ev=safeGet(value,'Value'); if type(ev)=='number' then writeToken(out,name,ev) elseif type(value)=='number' then writeToken(out,name,value) end
+    elseif kind == 'Ref' then writeRef(out,name,state and state.referentOf and state.referentOf[value] or nil)
+    elseif kind == 'Vector2' then writeVector2(out,name,value)
+    elseif kind == 'Vector3' then writeVector3(out,name,value)
+    elseif kind == 'Color3' then writeColor3(out,name,value)
+    elseif kind == 'CFrame' then writeCoordinateFrame(out,name,value)
+    elseif kind == 'NumberRange' then writeNumberRange(out,name,value)
+    elseif kind == 'NumberSequence' then writeNumberSequence(out,name,value)
+    elseif kind == 'ColorSequence' then writeColorSequence(out,name,value)
+    elseif kind == 'UDim' then writeUDim(out,name,value)
+    elseif kind == 'UDim2' then writeUDim2(out,name,value)
+    elseif kind == 'Rect' then writeRect(out,name,value)
+    elseif kind == 'PhysicalProperties' then writePhysicalProperties(out,name,value)
+    elseif kind == 'Font' then writeFont(out,name,value)
+    else writeAny(out,name,value,state) end
 end
 
 local function writeSpecProperties(out, inst, state)
     local list = KNOWN_PROPERTIES[inst.ClassName]
     if type(list) ~= 'table' then return end
+    local schema = PROPERTY_TYPES[inst.ClassName]
     for _, prop in ipairs(list) do
         if not EXCLUDED_PROPERTIES[prop] and not isContentProperty(inst.ClassName, prop) then
             local v = safeGet(inst, prop)
             if isInt64Property(inst.ClassName, prop) then
                 if type(v) == 'number' then writeInt64(out, prop, v) end
+            elseif schema and schema[prop] then
+                writeTyped(out, prop, v, schema[prop], state)
             else
                 writeAny(out, prop, v, state)
             end
@@ -1752,7 +1870,7 @@ local function writeDynamicProperties(out, inst, state)
                 if looksContent then
                     local normalized = normalizeAssetUrl(v)
                     if normalized ~= nil then
-                        writeContent(out, prop, v)
+                        writeContentId(out, prop, v)
                     else
                         writeAny(out, prop, v, state)
                     end
@@ -1919,9 +2037,8 @@ end
 
 local function writeScriptSource(out, inst)
     local src = tryDecompileScript(inst)
-    if src then
-        local name = safeGet(inst, 'Name') or 'Script'
-        writeString(out, 'Source', src)
+    if src ~= nil and src ~= '' then
+        writeProtectedString(out, 'Source', src)
     end
 end
 
@@ -2007,7 +2124,7 @@ local function writeKnownProperties(out, inst, state)
     -- Asset/content properties are handled centrally so a class does not need
     -- a dedicated CLASS_HANDLER just to preserve its asset IDs (for example
     -- Sound.SoundId or Animation.AnimationId).
-    writeContentProps(out, inst, inst.ClassName)
+    writeContentProps(out, inst, inst.ClassName, state)
 
     local classHandler = CLASS_HANDLERS[inst.ClassName]
     if classHandler then
