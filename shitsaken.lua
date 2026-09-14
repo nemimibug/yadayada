@@ -161,10 +161,9 @@ end
 
 local HttpService = game:GetService("HttpService")
 
--- The old imtheo URL currently redirects to the newer offsets host.
--- Try the new endpoint first, then keep the old one as a fallback.
 local OFFSET_URLS = {
     "https://offsets.imtheo.lol/Offsets.json",
+    "https://offsets.imtheo.lol/OffsetsHex.json",
     "https://imtheo.lol/Offsets/Offsets.json",
 }
 
@@ -178,49 +177,117 @@ local function decodeOffsetValue(value)
         if hex then
             return tonumber(hex, 16)
         end
-
         return tonumber(value)
     end
 
     return nil
 end
 
+local function requestBody(url)
+    local errors = {}
+
+    -- Prefer executor request APIs when available. They tend to handle
+    -- redirects/CDN responses more reliably than game:HttpGet.
+    local requestFns = {
+        rawget(_G, "request"),
+        rawget(_G, "http_request"),
+        syn and syn.request or nil,
+        http and http.request or nil,
+    }
+
+    for _, requestFn in ipairs(requestFns) do
+        if type(requestFn) == "function" then
+            local ok, result = pcall(requestFn, {
+                Url = url,
+                Method = "GET",
+                Headers = {
+                    ["Accept"] = "application/json,text/plain,*/*",
+                    ["User-Agent"] = "Mozilla/5.0",
+                    ["Cache-Control"] = "no-cache",
+                },
+            })
+
+            if ok and type(result) == "table" then
+                local body = result.Body or result.body
+                if type(body) == "string" and body:match("%S") then
+                    return body
+                end
+                errors[#errors + 1] = "request API returned an empty body"
+            elseif not ok then
+                errors[#errors + 1] = tostring(result)
+            end
+        end
+    end
+
+    local ok, body = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+
+    if ok and type(body) == "string" and body:match("%S") then
+        return body
+    end
+
+    errors[#errors + 1] = ok and "game:HttpGet returned an empty body" or tostring(body)
+    return nil, table.concat(errors, " | ")
+end
+
+local function decodeOffsetDump(body)
+    if type(body) ~= "string" or not body:match("%S") then
+        return nil, "empty HTTP response"
+    end
+
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, body)
+    if not ok then
+        return nil, "JSON decode failed: " .. tostring(decoded)
+    end
+
+    -- Some proxies/CDNs can return a JSON-encoded string containing the
+    -- actual JSON payload. Decode one extra layer if that happens.
+    if type(decoded) == "string" then
+        local ok2, decoded2 = pcall(HttpService.JSONDecode, HttpService, decoded)
+        if ok2 then
+            decoded = decoded2
+        end
+    end
+
+    if type(decoded) ~= "table" then
+        return nil, "decoded JSON was not a table (got " .. type(decoded) .. ")"
+    end
+
+    return decoded
+end
+
 local function loadOffsetDump()
     local errors = {}
 
     for _, url in ipairs(OFFSET_URLS) do
-        local ok, result = pcall(function()
-            local response = game:HttpGet(url)
-            if type(response) ~= "string" or response == "" then
-                error("empty HTTP response")
+        local body, httpErr = requestBody(url)
+        if body then
+            local decoded, decodeErr = decodeOffsetDump(body)
+            if decoded then
+                debugPrint("Loaded offsets from " .. url)
+                return decoded
             end
-
-            local decoded = HttpService:JSONDecode(response)
-            if type(decoded) ~= "table" then
-                error("decoded JSON was not a table")
-            end
-
-            return decoded
-        end)
-
-        if ok then
-            debugPrint("Loaded offsets from " .. url)
-            return result
+            errors[#errors + 1] = url .. ": " .. tostring(decodeErr)
+        else
+            errors[#errors + 1] = url .. ": " .. tostring(httpErr)
         end
-
-        errors[#errors + 1] = url .. ": " .. tostring(result)
     end
 
-    error("Unable to load offsets. " .. table.concat(errors, " | "))
+    error("[Offsets] Unable to load a valid offset dump. " .. table.concat(errors, " || "))
 end
 
 local rawOffsetDump = loadOffsetDump()
 
--- Support both formats:
---   { Offsets = { ... } }
--- and:
---   { ... }
-local offsets = rawOffsetDump.Offsets or rawOffsetDump
+-- Never index .Offsets unless the loader definitely returned a table.
+if type(rawOffsetDump) ~= "table" then
+    error("[Offsets] Internal loader error: offset dump is " .. type(rawOffsetDump))
+end
+
+local offsets = rawOffsetDump
+if type(rawOffsetDump.Offsets) == "table" then
+    offsets = rawOffsetDump.Offsets
+end
 
 local function getOffset(category, name, required)
     local group = offsets[category]
@@ -266,13 +333,9 @@ end
 local guiSizeOffset = getOffset("GuiObject", "Size", true)
 
 local memoryOffsets = {
-    -- These are required by the code paths that read GUI state/text.
     Text = getOffset("GuiObject", "Text", true),
     ElementVisible = getOffset("GuiObject", "Visible", true),
     FrameSizeX = guiSizeOffset + 44,
-
-    -- These are used later for highlight memory reads, so fail here with
-    -- a useful error instead of crashing later on nil arithmetic.
     Adornee = getOffset("Misc", "Value", true),
     BaseColor3 = getOffset("SurfaceAppearance", "ColorMap", true),
 }
