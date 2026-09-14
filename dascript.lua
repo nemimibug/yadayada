@@ -574,11 +574,11 @@ local KNOWN_PROPERTIES = {
     ParticleEmitter = {
         'Archivable', 'Enabled', 'Name', 'Parent', 'UniqueId',
         'Acceleration', 'Brightness', 'Color', 'Drag', 'EmissionDirection',
-        'FlipbookFramerate', 'FlipbookLayout', 'FlipbookMode', 'FlipbookStartRandom',
-        'Lifetime', 'LightEmission', 'LightInfluence', 'LockedToPart', 'Orientation',
+        'FlipbookBlendFrames', 'FlipbookFramerate', 'FlipbookSizeX', 'FlipbookSizeY', 'FlipbookLayout', 'FlipbookMode', 'FlipbookStartRandom',
+        'Lifetime', 'LightEmission', 'LightInfluence', 'LocalTransparencyModifier', 'LockedToPart', 'Orientation',
         'Rate', 'RotSpeed', 'Rotation', 'Shape', 'ShapeInOut', 'ShapePartial',
         'ShapeStyle', 'Size', 'Speed', 'SpreadAngle', 'Squash', 'TimeScale',
-        'Transparency', 'VelocityInheritance', 'WindAffectsDrag', 'ZOffset',
+        'Transparency', 'VelocityInheritance', 'VelocitySpread', 'WindAffectsDrag', 'ZOffset',
     },
 
     Beam = {
@@ -625,38 +625,117 @@ local KNOWN_PROPERTIES = {
     },
 }
 
+-- Extra property coverage for classes that commonly carry assets/effects/UI state.
+-- Kept separate from the original table so this remains easy to extend.
+local EXTRA_KNOWN_PROPERTIES = {
+    Animation = { 'Archivable', 'Name', 'Parent', 'UniqueId' },
+    AudioPlayer = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AssetId', 'AutoLoad', 'AutoPlay', 'Looping', 'LoopRegion', 'PlaybackRegion', 'PlaybackSpeed', 'TimePosition', 'Volume' },
+    VideoFrame = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'Looped', 'Playing', 'RollOffMaxDistance', 'RollOffMinDistance', 'RollOffMode', 'TimePosition', 'Volume' },
+    VideoPlayer = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AutoLoadInStudio', 'AutoPlayInStudio', 'Looping', 'PlaybackSpeed', 'TimePosition', 'Volume' },
+    Decal = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'Color3', 'Face', 'Transparency', 'ZIndex' },
+    Texture = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'Color3', 'Face', 'OffsetStudsU', 'OffsetStudsV', 'StudsPerTileU', 'StudsPerTileV', 'Transparency', 'ZIndex' },
+    SurfaceAppearance = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AlphaMode', 'Color', 'EmissiveStrength', 'EmissiveTint', 'ResampleMode' },
+    MaterialVariant = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AlphaMode', 'BaseMaterial', 'CustomPhysicalProperties', 'EmissiveStrength', 'EmissiveTint', 'MaterialPattern', 'StudsPerTile' },
+    Sky = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'CelestialBodiesShown', 'MoonAngularSize', 'SkyboxOrientation', 'StarCount', 'SunAngularSize' },
+    Tool = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'CanBeDropped', 'Enabled', 'Grip', 'GripForward', 'GripPos', 'GripRight', 'GripUp', 'ManualActivationOnly', 'RequiresHandle', 'ToolTip' },
+    ClickDetector = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'MaxActivationDistance' },
+    DragDetector = { 'Archivable', 'Name', 'Parent', 'UniqueId' },
+    ImageLabel = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'ImageColor3', 'ImageRectOffset', 'ImageRectSize', 'ImageTransparency', 'ResampleMode', 'ScaleType', 'SliceCenter', 'SliceScale', 'TileSize' },
+    ImageButton = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AutoButtonColor', 'HoverImage', 'ImageColor3', 'ImageRectOffset', 'ImageRectSize', 'ImageTransparency', 'PressedImage', 'ResampleMode', 'ScaleType', 'SliceCenter', 'SliceScale', 'TileSize' },
+    ImageHandleAdornment = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AlwaysOnTop', 'CFrame', 'Color3', 'Size', 'Transparency', 'ZIndex' },
+    CharacterMesh = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'BodyPart' },
+    WrapLayer = { 'Archivable', 'Name', 'Parent', 'UniqueId', 'AutoSkin', 'BindOffset', 'Color', 'DebugMode', 'Enabled', 'Order', 'Puffiness', 'ReferenceOrigin', 'ShrinkFactor' },
+    WrapTarget = { 'Archivable', 'Name', 'Parent', 'UniqueId' },
+    Beam = { 'Archivable', 'Enabled', 'Name', 'Parent', 'UniqueId', 'Attachment0', 'Attachment1', 'Brightness', 'Color', 'CurveSize0', 'CurveSize1', 'FaceCamera', 'LightEmission', 'LightInfluence', 'Segments', 'TextureLength', 'TextureMode', 'TextureSpeed', 'Transparency', 'Width0', 'Width1', 'ZOffset' },
+    Trail = { 'Archivable', 'Enabled', 'Name', 'Parent', 'UniqueId', 'Attachment0', 'Attachment1', 'Brightness', 'Color', 'FaceCamera', 'Lifetime', 'LightEmission', 'LightInfluence', 'MaxLength', 'MinLength', 'TextureLength', 'TextureMode', 'Transparency', 'WidthScale' },
+}
+
+for className, props in pairs(EXTRA_KNOWN_PROPERTIES) do
+    local list = KNOWN_PROPERTIES[className]
+    if type(list) ~= 'table' then
+        list = {}
+        KNOWN_PROPERTIES[className] = list
+    end
+    local seen = {}
+    for _, p in ipairs(list) do seen[p] = true end
+    for _, p in ipairs(props) do
+        if not seen[p] then
+            list[#list + 1] = p
+            seen[p] = true
+        end
+    end
+end
+
 -- Properties that contain Roblox asset/content IDs.
 -- These are written as <Content> values instead of ordinary strings.
 local CONTENT_PROPS_BY_CLASSNAME = {
-    MeshPart = { 'MeshId', 'TextureID', 'TextureId', 'MeshContent', 'TextureContent' },
+    MeshPart = { 'MeshId', 'MeshContent', 'TextureID', 'TextureId', 'TextureContent' },
     SpecialMesh = { 'MeshId', 'TextureId' },
-    CharacterMesh = { 'MeshId', 'OverlayTextureId' },
+    CharacterMesh = { 'MeshId', 'BaseTextureId', 'OverlayTextureId' },
 
-    ParticleEmitter = { 'Texture' },
-    Beam = { 'Texture' },
-    Trail = { 'Texture' },
+    ParticleEmitter = { 'Texture', 'TextureContent' },
+    Beam = { 'Texture', 'TextureContent' },
+    Trail = { 'Texture', 'TextureContent' },
 
-    Decal = { 'Texture' },
-    Texture = { 'Texture' },
-    SurfaceAppearance = { 'ColorMap', 'NormalMap', 'RoughnessMap', 'MetalnessMap' },
-    MaterialVariant = { 'ColorMap', 'MetalnessMap', 'NormalMap', 'RoughnessMap' },
+    Decal = { 'Texture', 'TextureContent' },
+    Texture = { 'Texture', 'TextureContent' },
+    SurfaceAppearance = {
+        'ColorMap', 'ColorMapContent',
+        'MetalnessMap', 'MetalnessMapContent',
+        'NormalMap', 'NormalMapContent',
+        'RoughnessMap', 'RoughnessMapContent',
+        'EmissiveMaskContent', 'TexturePackContent',
+    },
+    MaterialVariant = {
+        'ColorMap', 'ColorMapContent',
+        'MetalnessMap', 'MetalnessMapContent',
+        'NormalMap', 'NormalMapContent',
+        'RoughnessMap', 'RoughnessMapContent',
+        'EmissiveMaskContent',
+    },
 
     Shirt = { 'ShirtTemplate' },
     Pants = { 'PantsTemplate' },
     ShirtGraphic = { 'Graphic' },
 
-    ImageLabel = { 'Image' },
-    ImageButton = { 'Image' },
-    VideoFrame = { 'Video' },
+    ImageLabel = { 'Image', 'ImageContent' },
+    ImageButton = { 'Image', 'ImageContent', 'HoverImage', 'PressedImage' },
+    ImageHandleAdornment = { 'Image' },
+
+    Tool = { 'TextureId' },
+    ClickDetector = { 'CursorIcon', 'CursorIconContent' },
+    DragDetector = { 'CursorIcon', 'CursorIconContent' },
+
+    VideoFrame = { 'Video', 'VideoContent' },
+    VideoPlayer = { 'VideoContent' },
 
     Sound = { 'SoundId', 'AudioContent' },
-    Animation = { 'AnimationId' },
+    AudioPlayer = { 'Asset', 'AudioContent' },
+    Animation = { 'AnimationId', 'AnimationContent' },
 
     Sky = {
-        'SkyboxBk', 'SkyboxDn', 'SkyboxFt',
-        'SkyboxLf', 'SkyboxRt', 'SkyboxUp',
-        'SunTextureId', 'MoonTextureId',
+        'SkyboxBk', 'SkyboxDn', 'SkyboxFt', 'SkyboxLf', 'SkyboxRt', 'SkyboxUp',
+        'SkyboxBackContent', 'SkyboxDownContent', 'SkyboxFrontContent',
+        'SkyboxLeftContent', 'SkyboxRightContent', 'SkyboxUpContent',
+        'SunTextureId', 'SunTextureContent', 'MoonTextureId', 'MoonTextureContent',
     },
+
+    WrapLayer = { 'CageMeshId', 'CageMeshContent', 'ReferenceMeshId', 'ReferenceMeshContent' },
+    WrapTarget = { 'CageMeshId', 'CageMeshContent' },
+}
+
+-- Numeric asset IDs use int64 in Roblox XML; writing these as floats can be ignored.
+local INT64_PROPERTIES_BY_CLASSNAME = {
+    HumanoidDescription = {
+        BackAccessory = false, FaceAccessory = false, FrontAccessory = false, HairAccessory = false,
+        HatAccessory = false, NeckAccessory = false, ShoulderAccessory = false, WaistAccessory = false,
+        ClimbAnimation = true, FallAnimation = true, IdleAnimation = true, JumpAnimation = true,
+        MoodAnimation = true, RunAnimation = true, SwimAnimation = true, WalkAnimation = true,
+        Face = true, Head = true, LeftArm = true, LeftLeg = true, RightArm = true, RightLeg = true,
+        Torso = true, GraphicTShirt = true, Pants = true, Shirt = true,
+    },
+    AccessoryDescription = { AssetId = true },
+    BodyPartDescription = { AssetId = true },
 }
 
 local EXCLUDED_PROPERTIES = {
@@ -1116,6 +1195,10 @@ local function writeInt(out, name, v)
     writeTag(out, 'int', { name = name }, tostring(v))
 end
 
+local function writeInt64(out, name, v)
+    writeTag(out, 'int64', { name = name }, tostring(math.floor(v)))
+end
+
 local function writeFloat(out, name, v)
     writeTag(out, 'float', { name = name }, tostring(v))
 end
@@ -1430,6 +1513,55 @@ local function writeRect(out, name, v)
     push(out, '</Rect2D>')
 end
 
+local function writePhysicalProperties(out, name, v)
+    if v == nil then return end
+    local density = safeGet(v, 'Density')
+    local friction = safeGet(v, 'Friction')
+    local elasticity = safeGet(v, 'Elasticity')
+    local frictionWeight = safeGet(v, 'FrictionWeight')
+    local elasticityWeight = safeGet(v, 'ElasticityWeight')
+    if type(density) ~= 'number' then return end
+    push(out, '<PhysicalProperties name="' .. xmlEscape(name) .. '">')
+    writeTag(out, 'CustomPhysics', nil, 'true')
+    writeTag(out, 'Density', nil, tostring(density))
+    writeTag(out, 'Friction', nil, tostring(friction or 0))
+    writeTag(out, 'Elasticity', nil, tostring(elasticity or 0))
+    writeTag(out, 'FrictionWeight', nil, tostring(frictionWeight or 0))
+    writeTag(out, 'ElasticityWeight', nil, tostring(elasticityWeight or 0))
+    push(out, '</PhysicalProperties>')
+end
+
+local function writeFont(out, name, v)
+    if v == nil then return end
+    local family = safeGet(v, 'Family')
+    local weight = safeGet(v, 'Weight')
+    local style = safeGet(v, 'Style')
+    local cachedFaceId = safeGet(v, 'CachedFaceId')
+    push(out, '<Font name="' .. xmlEscape(name) .. '">')
+
+    local familyUrl = normalizeAssetUrl(family)
+    if familyUrl ~= nil then
+        push(out, '<Family><url>' .. xmlEscape(familyUrl) .. '</url></Family>')
+    end
+
+    local wv = weight and safeGet(weight, 'Value')
+    if type(wv) ~= 'number' and type(weight) == 'number' then wv = weight end
+    if type(wv) == 'number' then writeTag(out, 'Weight', nil, tostring(math.floor(wv))) end
+
+    local styleName = style and safeGet(style, 'Name')
+    if type(styleName) ~= 'string' then
+        local sv = style and safeGet(style, 'Value')
+        styleName = (sv == 1) and 'Italic' or 'Normal'
+    end
+    writeTag(out, 'Style', nil, xmlEscape(styleName))
+
+    local cachedUrl = normalizeAssetUrl(cachedFaceId)
+    if cachedUrl ~= nil then
+        push(out, '<CachedFaceId><url>' .. xmlEscape(cachedUrl) .. '</url></CachedFaceId>')
+    end
+    push(out, '</Font>')
+end
+
 local function getRobloxType(v)
     local ok, result = pcall(function()
         if typeof then return typeof(v) end
@@ -1439,81 +1571,92 @@ local function getRobloxType(v)
 end
 
 local function writeAny(out, name, v, state)
-    if v == nil then
-        return
-    end
+    if v == nil then return end
 
     local rtype = getRobloxType(v)
+
+    if rtype == 'Content' then writeContent(out, name, v); return end
+    if rtype == 'EnumItem' then
+        local ev = safeGet(v, 'Value')
+        if type(ev) == 'number' then writeToken(out, name, ev) end
+        return
+    end
+    if rtype == 'Instance' then
+        local ref = state and state.referentOf and state.referentOf[v] or nil
+        writeRef(out, name, ref)
+        return
+    end
+    if rtype == 'CFrame' then writeCoordinateFrame(out, name, v); return end
+    if rtype == 'Vector3' then writeVector3(out, name, v); return end
+    if rtype == 'Vector2' then writeVector2(out, name, v); return end
+    if rtype == 'Color3' then writeColor3(out, name, v); return end
+    if rtype == 'BrickColor' then writeBrickColor(out, name, v); return end
     if rtype == 'NumberRange' then writeNumberRange(out, name, v); return end
     if rtype == 'NumberSequence' then writeNumberSequence(out, name, v); return end
     if rtype == 'ColorSequence' then writeColorSequence(out, name, v); return end
     if rtype == 'UDim' then writeUDim(out, name, v); return end
     if rtype == 'UDim2' then writeUDim2(out, name, v); return end
     if rtype == 'Rect' then writeRect(out, name, v); return end
-    if rtype == 'Vector2' then writeVector2(out, name, v); return end
+    if rtype == 'PhysicalProperties' then writePhysicalProperties(out, name, v); return end
+    if rtype == 'Font' then writeFont(out, name, v); return end
 
     local tv = type(v)
-    if tv == 'boolean' then
-        writeBool(out, name, v)
-        return
-    end
-    if tv == 'number' then
-        writeFloat(out, name, v)
-        return
-    end
-    if tv == 'string' then
-        writeString(out, name, v)
-        return
-    end
+    if tv == 'boolean' then writeBool(out, name, v); return end
+    if tv == 'number' then writeFloat(out, name, v); return end
+    if tv == 'string' then writeString(out, name, v); return end
 
+    -- Fallbacks for executors where typeof() is incomplete.
     local enumValue = safeGet(v, 'Value')
-    if type(enumValue) == 'number' then
+    if type(enumValue) == 'number' and safeGet(v, 'EnumType') ~= nil then
         writeToken(out, name, enumValue)
         return
     end
 
     local className = safeGet(v, 'ClassName')
     if state and state.referentOf and type(className) == 'string' then
-        local ref = state.referentOf[v]
-        writeRef(out, name, ref)
+        writeRef(out, name, state.referentOf[v])
         return
     end
 
     local okCf = pcall(function()
-        if type(v.GetComponents) == 'function' then
-            return v:GetComponents()
-        end
+        if type(v.GetComponents) == 'function' then return v:GetComponents() end
         return v:components()
     end)
-    if okCf then
-        writeCoordinateFrame(out, name, v)
-        return
-    end
+    if okCf then writeCoordinateFrame(out, name, v); return end
 
-    local x = safeGet(v, 'X')
-    local y = safeGet(v, 'Y')
-    local z = safeGet(v, 'Z')
+    local x, y, z = safeGet(v, 'X'), safeGet(v, 'Y'), safeGet(v, 'Z')
     if type(x) == 'number' and type(y) == 'number' and type(z) == 'number' then
         writeVector3(out, name, v)
         return
     end
 
-    local r = safeGet(v, 'R')
-    local g = safeGet(v, 'G')
-    local b = safeGet(v, 'B')
+    local r, g, b = safeGet(v, 'R'), safeGet(v, 'G'), safeGet(v, 'B')
     if type(r) == 'number' and type(g) == 'number' and type(b) == 'number' then
         writeColor3(out, name, v)
         return
     end
 
-    writeString(out, name, tostring(v))
+    -- Unknown userdata is intentionally skipped instead of writing a bogus string
+    -- that Roblox will reject for the actual property type.
+end
+
+local function isContentProperty(className, prop)
+    local list = CONTENT_PROPS_BY_CLASSNAME[className]
+    if type(list) ~= 'table' then return false end
+    for _, p in ipairs(list) do
+        if p == prop then return true end
+    end
+    return false
+end
+
+local function isInt64Property(className, prop)
+    local map = INT64_PROPERTIES_BY_CLASSNAME[className]
+    return type(map) == 'table' and map[prop] == true
 end
 
 local function writeContentProps(out, inst, className)
     local list = CONTENT_PROPS_BY_CLASSNAME[className]
-    if not list then
-        return
-    end
+    if not list then return end
     for _, prop in ipairs(list) do
         writeContent(out, prop, safeGet(inst, prop))
     end
@@ -1521,12 +1664,102 @@ end
 
 local function writeSpecProperties(out, inst, state)
     local list = KNOWN_PROPERTIES[inst.ClassName]
-    if type(list) ~= 'table' then
-        return
-    end
+    if type(list) ~= 'table' then return end
     for _, prop in ipairs(list) do
-        if not EXCLUDED_PROPERTIES[prop] then
-            writeAny(out, prop, safeGet(inst, prop), state)
+        if not EXCLUDED_PROPERTIES[prop] and not isContentProperty(inst.ClassName, prop) then
+            local v = safeGet(inst, prop)
+            if isInt64Property(inst.ClassName, prop) then
+                if type(v) == 'number' then writeInt64(out, prop, v) end
+            else
+                writeAny(out, prop, v, state)
+            end
+        end
+    end
+end
+
+-- Some executors expose getproperties(instance). If present, use it as a bonus
+-- discovery layer for properties not covered by the static API list above.
+local function getPropertyEnumerator()
+    local candidates = {}
+    local ok, env = pcall(function()
+        if type(getgenv) == 'function' then return getgenv() end
+        return nil
+    end)
+    if ok and type(env) == 'table' then candidates[#candidates + 1] = env end
+    candidates[#candidates + 1] = _G
+    for _, e in ipairs(candidates) do
+        local f = rawget(e, 'getproperties')
+        if type(f) == 'function' then return f end
+    end
+    return nil
+end
+
+local PROPERTY_ENUMERATOR = getPropertyEnumerator()
+
+local BASEPART_MANUAL = {
+    CFrame=true, Size=true, Anchored=true, CanCollide=true, CanQuery=true, CanTouch=true,
+    Massless=true, CastShadow=true, Locked=true, Transparency=true, Reflectance=true,
+    Color=true, BrickColor=true, CollisionGroupId=true, Material=true, Velocity=true,
+    AssemblyLinearVelocity=true,
+}
+
+local function staticallyHandled(inst, prop)
+    if prop == 'Name' or prop == 'Parent' or prop == 'ClassName' or prop == 'UniqueId' then return true end
+    if isContentProperty(inst.ClassName, prop) or isInt64Property(inst.ClassName, prop) then return true end
+    if inst:IsA('BasePart') and BASEPART_MANUAL[prop] then return true end
+    local list = KNOWN_PROPERTIES[inst.ClassName]
+    if type(list) == 'table' then
+        for _, p in ipairs(list) do if p == prop then return true end end
+    end
+    if inst:IsA('ValueBase') and prop == 'Value' then return true end
+    return false
+end
+
+local function writeDynamicProperties(out, inst, state)
+    if type(PROPERTY_ENUMERATOR) ~= 'function' then return end
+    local ok, props = pcall(PROPERTY_ENUMERATOR, inst)
+    if not ok or type(props) ~= 'table' then return end
+
+    local names = {}
+    for k, v in pairs(props) do
+        if type(k) == 'string' then
+            names[#names + 1] = k
+        elseif type(v) == 'string' then
+            names[#names + 1] = v
+        end
+    end
+    table.sort(names)
+
+    local seen = {}
+    for _, prop in ipairs(names) do
+        if not seen[prop] and not staticallyHandled(inst, prop) then
+            seen[prop] = true
+            local v = safeGet(inst, prop)
+            if v ~= nil then
+                -- Conservative asset-name heuristic for newly-added Roblox content properties.
+                local lower = string.lower(prop)
+                local looksContent = lower:find('texture', 1, true)
+                    or lower:find('content', 1, true)
+                    or lower:find('image', 1, true)
+                    or lower:find('animationid', 1, true)
+                    or lower:find('soundid', 1, true)
+                    or lower:find('meshid', 1, true)
+                    or lower:find('cursoricon', 1, true)
+                    or lower:find('colormap', 1, true)
+                    or lower:find('normalmap', 1, true)
+                    or lower:find('roughnessmap', 1, true)
+                    or lower:find('metalnessmap', 1, true)
+                if looksContent then
+                    local normalized = normalizeAssetUrl(v)
+                    if normalized ~= nil then
+                        writeContent(out, prop, v)
+                    else
+                        writeAny(out, prop, v, state)
+                    end
+                else
+                    writeAny(out, prop, v, state)
+                end
+            end
         end
     end
 end
@@ -1556,7 +1789,7 @@ local function writeBasePartProperties(out, inst)
     end
 
     local mat = safeGet(inst, 'Material')
-    local matValue = (type(mat) == 'table') and safeGet(mat, 'Value') or nil
+    local matValue = safeGet(mat, 'Value')
     if type(matValue) == 'number' then
         writeToken(out, 'Material', matValue)
     end
@@ -1574,7 +1807,7 @@ CLASS_HANDLERS.Decal = function(out, inst, _state)
     writeColor3(out, 'Color3', safeGet(inst, 'Color3'))
 
     local face = safeGet(inst, 'Face')
-    local faceValue = (type(face) == 'table') and safeGet(face, 'Value') or nil
+    local faceValue = safeGet(face, 'Value')
     if type(faceValue) == 'number' then
         writeToken(out, 'Face', faceValue)
     end
@@ -1588,7 +1821,7 @@ CLASS_HANDLERS.Texture = function(out, inst, _state)
     writeColor3(out, 'Color3', safeGet(inst, 'Color3'))
 
     local face = safeGet(inst, 'Face')
-    local faceValue = (type(face) == 'table') and safeGet(face, 'Value') or nil
+    local faceValue = safeGet(face, 'Value')
     if type(faceValue) == 'number' then
         writeToken(out, 'Face', faceValue)
     end
@@ -1602,7 +1835,7 @@ end
 
 CLASS_HANDLERS.CharacterMesh = function(out, inst, _state)
     local bp = safeGet(inst, 'BodyPart')
-    local bpValue = (type(bp) == 'table') and safeGet(bp, 'Value') or nil
+    local bpValue = safeGet(bp, 'Value')
     if type(bpValue) == 'number' then
         writeToken(out, 'BodyPart', bpValue)
     end
@@ -1674,7 +1907,7 @@ end
 CLASS_HANDLERS.Accessory = function(out, inst, _state)
     writeCoordinateFrame(out, 'AttachmentPoint', safeGet(inst, 'AttachmentPoint'))
     local at = safeGet(inst, 'AccessoryType')
-    local atValue = (type(at) == 'table') and safeGet(at, 'Value') or nil
+    local atValue = safeGet(at, 'Value')
     if type(atValue) == 'number' then
         writeToken(out, 'AccessoryType', atValue)
     end
@@ -1782,6 +2015,7 @@ local function writeKnownProperties(out, inst, state)
     end
 
     writeSpecProperties(out, inst, state)
+    writeDynamicProperties(out, inst, state)
 end
 
 local function writeValueBaseValue(out, inst, state)
