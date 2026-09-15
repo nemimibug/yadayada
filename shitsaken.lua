@@ -1103,7 +1103,12 @@ local function parse_grid()
 				local circle = cell:FindFirstChild("Circle")
 				local numberLabel = circle and circle:FindFirstChild("Number")
 				if numberLabel then
-					local pairNum = tonumber(memory_read("string", numberLabel.Address + memoryOffsets.Text)) or tonumber(numberLabel.Text)
+					-- Prefer the real Roblox property. Memory offsets are only a fallback.
+					local pairNum = tonumber(numberLabel.Text)
+					if not pairNum and memory_read and numberLabel.Address and memoryOffsets.Text then
+						local ok, raw = pcall(memory_read, "string", numberLabel.Address + memoryOffsets.Text)
+						if ok then pairNum = tonumber(raw) end
+					end
 					if pairNum then
 						cells[row][col].value = pairNum
 						circles[pairNum] = circles[pairNum] or {}
@@ -1855,23 +1860,31 @@ function ap:gkv(killer)
 end
 
 -- Optimized sound search - use direct child lookup instead of GetChildren iteration
+local function normalizeAssetId(value)
+	return tostring(value or ""):match("(%d+)")
+end
+
 function ap:fass(killer, swingIds)
-	if not swingIds or not killer or not killer:FindFirstChild("HumanoidRootPart") then
+	if not swingIds or not killer then
 		return nil
 	end
 
-	local hrp = killer.HumanoidRootPart
+	local wanted = {}
+	for _, swingId in ipairs(swingIds) do
+		wanted[normalizeAssetId(swingId)] = true
+	end
 
-	for _, swingId in pairs(swingIds) do
-		-- Direct lookup by name (assuming sound names match swingIds)
-		local sound = hrp:FindFirstChild(swingId)
-
-		if sound and sound:IsA("Sound") then
-			local soundId = gsid(sound)
-			if tostring(soundId) == tostring(swingId) then
-				local idkey = sound.Address and tostring(sound.Address) or tostring(sound)
-				if not SWING_BLACKLIST[idkey] then
-					return sound
+	-- Swing sounds are not guaranteed to be direct HRP children or named after the ID.
+	-- Search the killer model and compare SoundId instead.
+	for _, object in ipairs(killer:GetDescendants()) do
+		if object:IsA("Sound") then
+			local soundId = normalizeAssetId(object.SoundId)
+			if soundId and wanted[soundId] then
+				local playing = false
+				pcall(function() playing = object.Playing or object.IsPlaying end)
+				if playing then
+					local idkey = object.Address and tostring(object.Address) or tostring(object)
+					if not SWING_BLACKLIST[idkey] then return object end
 				end
 			end
 		end
@@ -2177,7 +2190,8 @@ local function abOnUpdate()
 	Scheduler.stp()
 
 	local now = gettime()
-	if true then
+	if config["Toggle_BlockMonitor"] == true then
+		if not ps.isActive then ps:Start() end
 		ps:stp()
 
 		if now - lcc > 5 then
@@ -2190,6 +2204,7 @@ local function abOnUpdate()
 			lcc = now
 		end
 	else
+		if ps.isActive then ps:Stop() end
 		rotationCache = {}
 		ps.positionHistory = {}
 	end
@@ -3591,10 +3606,13 @@ local function TickSlow()
 		local visible = false
 
 		if container then
-			local success, isVisible = pcall(function()
-				return memory_read("float", container.Address + memoryOffsets.FrameSizeX) > 0.49
+			-- Do not depend on version-specific memory offsets for normal GUI state.
+			local ok = pcall(function()
+				visible = container.Visible ~= false
+					and container.AbsoluteSize.X > 1
+					and container.AbsoluteSize.Y > 1
 			end)
-			visible = success and isVisible
+			if not ok then visible = false end
 		end
 
 		if visible and puzzleGrid then
@@ -3614,6 +3632,7 @@ print([[
 ==============================
 shitsaken by jurylol
 contributions by mildilyacidic
+fixed and mantained by ava.png
 ==============================                                                   
 v]] .. vn )
 
